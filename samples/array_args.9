@@ -1,0 +1,25 @@
+var a : int[5][10];
+var b : int;
+type single_array = int[10];
+
+proc main(x : single_array)
+  for n := 0 to 9 then
+     write x[n];
+  end
+end
+
+b := 1;
+
+# populate the array
+for i := 0 to 4 then
+
+  for j := 0 to 9 then
+  
+     a[i][j] := b;
+     b := b + 1;
+  end
+end
+
+for i := 0 to 4 then
+  main(a[i]);
+end

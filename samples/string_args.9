@@ -1,0 +1,36 @@
+var str : string;
+type string_array = string[3];
+var str_array : string_array;
+
+proc main(s : string)
+  write s;
+end
+
+proc main2(s : string_array)
+  for i := 0 to 2 then
+    write s[i];
+  end
+end
+
+main('This tests out passing string to a proc');
+
+str := "This is another string";
+main(str);
+write str;
+
+for i := 0 to 2 then
+  if i = 0 then
+    str_array[i] := 'String 0';
+  elseif i = 1 then
+    str_array[i] := 'String 1';
+  elseif i = 2 then
+    str_array[i] := 'String 2';
+  end
+end
+
+for i := 0 to 2 then
+  write str_array[i];
+end
+
+main2(str_array);
+

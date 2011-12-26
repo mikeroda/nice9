@@ -1,0 +1,19 @@
+# iterative factorial program
+#:compile
+
+proc ifact(n: int) : int
+  ifact := 1;
+  for k := 2 to n then ifact := ifact * k;  end
+end
+
+var f: int;
+
+writes "What number to you want to compute the factorial of? ";
+f := read;
+if (f < 1) + (f > 100) then write "Invalid n: limited to 0 < n < 101"; exit; end
+
+
+writes "Factorial of ";
+writes f;
+writes " is ";
+write ifact(f);

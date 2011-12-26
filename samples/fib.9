@@ -1,0 +1,18 @@
+# endbonacci program
+proc endb(n: int) : int
+  if n < 2 then endb := n;
+  else then endb := endb(n-1) + endb(n-2);
+  end
+end
+
+var f: int;
+
+writes "What Fibonacci number to computer? ";
+f := read;
+if (f < 0) + (f > 100) then write "Invalid: 0 < n < 101"; end
+
+
+writes "Fibonacci of ";
+writes f;
+writes " is ";
+write endb(f);

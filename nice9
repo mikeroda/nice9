@@ -1,0 +1,3 @@
+#!/bin/sh
+
+ruby nice9.tab.rb $*

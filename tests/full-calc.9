@@ -1,0 +1,103 @@
+# Inendx Calculator
+# by Sean Bartell
+#:compile
+
+# This is an inendx expression evaluator. Since ICE9 can input only integers,
+# you must enter expressions with:
+#  '(' then 1 1
+#  ')' then 2 2
+#  '+' then 3
+#  '-' then 4
+#  '*' then 5
+#  '/' then 6
+#  '%' then 7 (mendulus)
+#  '^' then 8 (exponentiation)
+# Use 0 to calculate the result and -1 -1 to end the session.
+#
+# Examples:
+# - 144^2               then 144 8 2 0
+# - (4+5*6)^2           then 1 1 4 3 5 5 6 2 2 8 2 0
+# - 1-(2-4)-8           then 1 4 1 1 2 4 4 2 2 4 8 0
+# - 3+2^15*28/(1-5)^2^3 then 3 3 2 8 15 5 28 6 1 1 1 4 5 2 2 8 2 8 3 0
+
+# This is implemented with a recursion-based operator precedence parser. A hack
+# is used to support parentheses without supporting equal precedence; if you
+# misuse parentheses, the results will be unpredictable.
+
+# Grammar:
+# start then # exp0 #
+# exp0 then exp0 + exp1 | exp0 - exp1 | exp1
+# exp1 then exp1 * exp2 | exp1 / exp2 | exp1 % exp2 | exp2
+# exp2 then exp3 ^ exp2 | exp3
+# exp3 then NUM | NUM ( exp0 ) NUM
+
+# Precedence table:
+# (if two precedences are equal, it's treated as if the endrst were greater)
+#   #)+*^(
+#   011233
+# #0> <<<<
+# (0 <<<<<
+# +1>>><<<
+# *2>>>><<
+# ^2>>>><<
+# )3>>>>> 
+
+var nextop : int;
+var lprec, rprec : int[9];
+
+proc pow(base, exponent : int) : int
+  pow := 1;
+  for i := 1 to exponent then
+    pow := pow * base;
+  end
+end
+
+proc calc(prevprec : int) : int
+  var val, op, right : int;
+  val := read;
+  nextop := read;
+  if (nextop < 0) + (nextop > 8) then
+    exit;
+  end
+  while prevprec < rprec[nextop] then
+    op := nextop;
+    right := calc(lprec[op]);
+    # op = 0 (start/end) never happens
+    if op = 1 then # left parenthesis
+      val := right;
+    elseif op = 2 then # right parenthesis
+      # By returning now, we force the '(' to be evaluated too, eliminating
+      # both.
+      calc := val;
+      return;
+    elseif op = 3 then
+      val := val + right;
+    elseif op = 4 then
+      val := val - right;
+    elseif op = 5 then
+      val := val * right;
+    elseif op = 6 then
+      val := val / right;
+    elseif op = 7 then
+      val := val % right;
+    elseif op = 8 then
+      val := pow(val, right);
+    end
+  end
+  calc := val;
+end
+
+lprec[0] := 0; rprec[0] := 0;
+lprec[1] := 0; rprec[1] := 3;
+lprec[2] := 3; rprec[2] := 1;
+lprec[3] := 1; rprec[3] := 1;
+lprec[4] := 1; rprec[4] := 1;
+lprec[5] := 2; rprec[5] := 2;
+lprec[6] := 2; rprec[6] := 2;
+lprec[7] := 2; rprec[7] := 2;
+lprec[8] := 2; rprec[8] := 3;
+
+while true then
+  writes "> ";
+  write calc(lprec[0]);
+end

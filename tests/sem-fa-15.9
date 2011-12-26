@@ -1,0 +1,7 @@
+#:compile
+var x : int;
+x := 17;
+for i := 1 to x then # x is only evaluated once
+  x := x + 1;
+end
+write x; # 34

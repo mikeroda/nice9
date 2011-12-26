@@ -1,0 +1,638 @@
+#
+# nice9.racc
+# Author: Mike Roda
+#
+
+class Nice9
+  prechigh
+    right UMINUS
+    left TK_STAR TK_SLASH TK_MOD
+    left TK_PLUS TK_MINUS
+    nonassoc TK_EQ TK_NEQ TK_GT TK_LT TK_GE TK_LE
+  preclow
+  options no_result_var
+
+# Racc rules specifying the grammar
+#
+#   Non-terminal suffix naming convention (may be a combination of the below)
+#     '_'      may be empty (null)
+#     's'      repeating, no separator
+#     'list'   repeating, comma separated
+
+rule
+
+  # program	-> {var|type|forward|proc} { stm }
+
+  program      : defs_ stms_                                {
+                                                              @ast = AST::TopNode.new(val[0], val[1])
+                                                              
+                                                              # save the symbol tables in the top node 
+                                                              @ast.vars = @varSymbols.last
+                                                              @ast.types = @typeSymbols.last
+                                                              @ast.procs = @procSymbols.last
+                                                            }
+
+  defs_        : defs                                       { val[0] } 
+               |                                            { AST::Sequence.new([]) }
+
+  defs         : defsx                                      {
+                                                             AST::Sequence.new(val[0])
+                                                            }
+                                                            
+  defsx        : def defsx                                  { 
+                                                             if !val[0].nil? 
+                                                               [val[0]].concat(val[1]) 
+                                                             else
+                                                               val[1]
+                                                             end
+                                                            }
+               | def                                        { 
+                                                             if !val[0].nil? 
+                                                               [val[0]]
+                                                             else
+                                                               []
+                                                             end 
+                                                            }
+
+  def          : var     { nil }
+               | typedef { nil }
+               | forward { nil }
+               | proc                                       { val[0] }
+
+  # var	-> 'var' varlist ';'
+
+  var          : TK_VAR varlist TK_SEMI
+  
+  # varlist  -> idlist ':' typeid { '[' int ']' } { ',' varlist}
+
+  varlist      : vartype
+               | vartype TK_COMMA varlist
+
+  vartype      : idlist TK_COLON typeid                     { val[0].each{|id| add_var(id, val[2]) } }
+               | idlist TK_COLON typeid indices             { val[0].each{|id| add_var(id, val[3]) } }
+               
+  # type	-> 'type' id '=' typeid { '[' int ']' } ';'
+
+  typedef      : TK_TYPE TK_ID TK_EQ typeid TK_SEMI         { add_type(val[1], val[3]) }
+               | TK_TYPE TK_ID TK_EQ typeid indices TK_SEMI { add_type(val[1], val[4]) }
+               
+  indices      : indice indices                             { Type9.new(val[1], val[0].to_i) }
+               | indice                                     { Type9.new(@typeid, val[0].to_i) }
+
+  indice       : TK_LBRACK TK_INT TK_RBRACK                 { val[1] }
+
+  # typeid -> id
+
+  typeid       : TK_ID                                     { @typeid = lookupType(val[0]) }
+
+  # idlist  -> id { ',' id}
+
+  idlist       : TK_ID                                     { [val[0]] }
+               | TK_ID TK_COMMA idlist                     { idlist = val[2]; idlist.insert(0, val[0]) }
+
+  # forward -> 'forward' id '(' declist ')' ';'
+  #         -> 'forward' id '(' declist ')' ':' typeid ';'
+
+  forward      : TK_FORWARD TK_ID                           { @proc_args = []; @is_forward = true }
+                 proc_args 
+                 proc_return                                
+                 TK_SEMI                                    { add_proc(val[1], val[4], @proc_args, true) }
+  
+  # proc	-> 'proc' id '(' declist ')' {type|var} {stm} 'end'
+  #         -> 'proc' id '(' declist ')' ':' typeid {type|var} {stm} 'end'
+
+  proc         : TK_PROC TK_ID                              { enterScope; @proc_args = []; @is_forward = false }
+                 proc_args 
+                 proc_return                                { 
+                                                              raise SemanticError, "Procedure " + _values[-4] + " must return a basic type" if !_values[-1].basic_type
+                                                              pr = add_proc(_values[-4], _values[-1], @proc_args, false)
+                                                              @proc_args = []
+                                                              
+                                                              # add the name of the proc as a variable if one by the same name isn't in 
+                                                              # scope already (from the arguments)
+                                                              pr.return_var = add_var(_values[-4], _values[-1]) if @varSymbols.last[_values[-4]].nil? && _values[-1] != Type9::VOID
+                                                            }
+                 proc_body
+                 TK_END                                     {
+                                                              pr = lookupProc(val[1])
+                                                              ast_node = AST::Proc.new(pr, val[6])
+
+                                                              # save the symbol tables in the proc node 
+                                                              ast_node.vars = @varSymbols.last
+                                                              ast_node.types = @typeSymbols.last
+
+                                                              leaveScope
+                                                              ast_node
+                                                            }
+
+  proc_args    : TK_LPAREN declist_ TK_RPAREN
+
+  proc_return  : TK_COLON TK_ID                             { lookupType(val[1]) }
+               |                                            { Type9::VOID }
+    
+  proc_body    : proc_defs_ stms_                           { val[1] }
+
+  proc_defs_   : proc_defs
+               |
+
+  proc_defs    : proc_def proc_defs
+               | proc_def
+               
+  proc_def     : typedef
+               | var
+  
+  # declist -> declistx
+  #         ->            # empty
+
+  declist_     : declistx
+               |
+
+  # declistx -> idlist ':' typeid { ',' declistx }
+
+  declistx     : dec
+               | dec TK_COMMA declistx
+
+  dec          : idlist TK_COLON typeid                     { 
+                                                              val[0].each{ |id|
+                                                                if !@is_forward
+                                                                  # add the arguments as variables to the current scope
+                                                                  var = add_var(id, val[2])
+                                                                else
+                                                                  # create a variable but don't add to the scope
+                                                                  var = Var9.new(id, val[2], true)
+                                                                end
+
+                                                                # keep the list of types for the proc signature
+                                                                @proc_args.push(var)
+                                                              }
+                                                            }
+
+  # stms	-> stm { stm }
+
+  stms_        : stms                                       { val[0] }
+               |                                            { AST::Sequence.new([]) }
+
+  stms         : stmsx                                      { 
+                                                               AST::Sequence.new(val[0])
+                                                            }
+
+  stmsx        : stm stmsx                                  { [val[0]].concat(val[1]) }
+               | stm                                        { [val[0]] }
+               
+  # stm	-> if | while | for | 'break' ';' | 'exit' ';'
+  #     -> 'return' ';'
+  #     -> lvalue ':=' exp ';'
+  #     -> 'write' exp ';' | 'writes' exp ';'
+  #     -> exp ';'
+  #     -> ';'
+
+  stm          : if                                        { val[0] }
+               | while                                     { val[0] }
+               | for                                        { val[0] }
+               | break                                     { val[0] }
+               | exit                                      { val[0] }
+               | TK_RETURN TK_SEMI                         { AST::Control.new(val[0]) }
+               | lvalue TK_ASSIGN exp TK_SEMI              {
+                                                             raise SemanticError, "Cannot assign to an array" if val[0].node_type.is_array
+                                                             if val[0].name != "[]"
+                                                               raise SemanticError, var.name + " cannot be assigned to" if !val[0].var.is_assignable
+                                                             end
+                                                             AST::Assignment.new(val[1], val[0], val[2])
+                                                           }
+               | TK_WRITE exp TK_SEMI                      { AST::Write.new(val[0], val[1]) }
+               | TK_WRITES exp TK_SEMI                     { AST::Write.new(val[0], val[1]) }
+               | exp TK_SEMI                               { val[0] }
+               | TK_SEMI                                   { nil }
+
+  # if	-> 'if' exp 'then' stms { 'elseif' exp 'then' stms } 'end'
+  #     -> 'if' exp 'then' stms { 'elseif' exp 'then' stms } 'else' 'then' stms 'end'
+
+  if           : TK_IF exp TK_THEN stms if_cont_ TK_END    {
+                                                            raise SemanticError, "if expression must be boolean" if !val[1].node_type.is_bool
+                                                            AST::IfElse.new(val[0], val[1], val[3], val[4]) 
+                                                           }
+
+  if_cont_     : if_cont                                   { val[0] }
+               |
+               
+  if_cont      : elseif                                    { val[0] }
+               | else                                      { val[0] }
+
+  elseif       : TK_ELSEIF exp TK_THEN stms if_cont_       { 
+                                                            raise SemanticError, "if expression must be boolean" if !val[1].node_type.is_bool
+                                                            AST::IfElse.new("elseif", val[1], val[3], val[4])
+                                                           }
+               
+  else         : TK_ELSE TK_THEN stms                     { val[2] }
+
+  # while	-> 'while' exp 'then' { stm } 'end'    
+  
+  while        : TK_WHILE exp TK_THEN                       { @loop_depth += 1
+                                                            raise SemanticError, "while expression must be boolean" if !_values[-2].node_type.is_bool 
+                                                          }
+                 stms_ 
+                 TK_END                                  { @loop_depth -= 1
+                                                            AST::WhileLoop.new(val[0], val[1], val[4])
+                                                          }
+                 
+                 
+
+  # for	-> 'for' id ':=' exp 'to' exp 'then' { stm } 'end'
+  
+  for           : TK_FOR TK_ID                                     
+                 TK_ASSIGN exp TK_TO exp TK_THEN          { enterScope
+                                                             @loop_depth += 1
+                                                             add_var(_values[-6], Type9::INT, false)
+                                                           }
+                 stms_                                     
+                 TK_END                                    {
+                                                             @loop_depth -= 1
+                                                             if !val[3].node_type.is_int || !val[5].node_type.is_int
+                                                               raise SemanticError, "expression(s) must evaluate to int"
+                                                             end
+                                                             id = AST::Identifier.new(val[7])  ###### NOT SURE ABOUT THIS
+                                                             
+                                                             ast_node = AST::ForLoop.new("for", id, val[3], val[5], val[8])
+                                                             ast_node.vars = @varSymbols.last
+
+                                                             leaveScope
+                                                             ast_node
+                                                           }
+                                                            
+  # exp	-> lvalue
+  #     -> int				
+  #     -> 'true'			
+  #     -> 'false'			
+  #     -> string
+  #     -> 'read'
+  #     -> '-' exp
+  #     -> '?' exp
+  #     -> id '(' ')'			
+  #     -> id '(' exp { ',' exp } ')'	
+  #     -> exp '+' exp
+  #     -> exp '-' exp
+  #     -> exp '*' exp# procedure call
+  #     -> exp '/' exp
+  #     -> exp '%' exp
+  #     -> exp '=' exp
+  #     -> exp '!=' exp
+  #     -> exp '>' exp
+  #     -> exp '<' exp
+  #     -> exp '>=' exp
+  #     -> exp '<=' exp
+  #     -> '(' exp ')'
+  
+  exp          : exp TK_MINUS exp                   { AST::BinaryExpression.new(val[1], val[0], val[2], val[0].node_type) }
+               | exp TK_PLUS exp                    { AST::BinaryExpression.new(val[1], val[0], val[2], val[0].node_type) }
+               | exp TK_STAR exp                    { AST::BinaryExpression.new(val[1], val[0], val[2], val[0].node_type) }
+               | exp TK_SLASH exp                   { AST::BinaryExpression.new(val[1], val[0], val[2], val[0].node_type) }
+               | exp TK_MOD exp                     { AST::BinaryExpression.new(val[1], val[0], val[2], val[0].node_type) }
+               | exp TK_EQ exp                      { AST::BinaryExpression.new(val[1], val[0], val[2], Type9::BOOLEAN) }
+               | exp TK_NEQ exp                     { AST::BinaryExpression.new(val[1], val[0], val[2], Type9::BOOLEAN) }
+               | exp TK_GT exp                      { AST::BinaryExpression.new(val[1], val[0], val[2], Type9::BOOLEAN) }
+               | exp TK_LT exp                      { AST::BinaryExpression.new(val[1], val[0], val[2], Type9::BOOLEAN) }
+               | exp TK_GE exp                      { AST::BinaryExpression.new(val[1], val[0], val[2], Type9::BOOLEAN) }
+               | exp TK_LE exp                      { AST::BinaryExpression.new(val[1], val[0], val[2], Type9::BOOLEAN) }
+               | TK_MINUS exp  =UMINUS              { AST::UnaryExpression.new(val[0], val[1], val[1].node_type) }
+               | TK_QUEST exp  =UMINUS              { AST::UnaryExpression.new(val[0], val[1], Type9::INT) }
+               | TK_LPAREN exp TK_RPAREN            { val[1] }
+               | TK_ID TK_LPAREN TK_RPAREN          { pr = lookupProc(val[0]); pr.check_args([]);     AST::Call.new(pr, [], pr.return_type) }
+               | TK_ID TK_LPAREN explist TK_RPAREN  { pr = lookupProc(val[0]); pr.check_args(val[2]); AST::Call.new(pr, val[2], pr.return_type) }
+               | TK_TRUE                            { AST::Literal.new(Type9::BOOLEAN, 1) }
+               | TK_FALSE                           { AST::Literal.new(Type9::BOOLEAN, 0) }
+               | TK_SLIT                            { AST::Literal.new(Type9::STRING, val[0][1..-2]) }
+               | TK_READ                            { AST::Read.new(val[0], Type9::INT) }
+               | lvalue                             { val[0] }
+               | TK_INT                             { AST::Literal.new(Type9::INT, val[0]) }
+
+  explist      : exp                                { [val[0]] }
+               | exp TK_COMMA explist               { explist = val[2]; explist.insert(0, val[0]) }
+
+  # lvalue	-> id | lvalue '[' exp ']'
+
+  lvalue       : TK_ID							    { var = lookupVar(val[0]); AST::Identifier.new(var) }
+               | lvalue TK_LBRACK exp TK_RBRACK     {
+                                                      raise SemanticError, "array index must evaluate to an int" if !val[2].node_type.is_int
+                                                      raise SemanticError, "attempt to index from non-array type" if !val[0].node_type.is_array
+                                                      
+                                                      AST::Indice.new("[]", val[0], val[2], val[0].node_type.array_size, val[0].node_type.underlying_type)
+                                                    }
+
+  # 'break' ';'
+
+  break        : TK_BREAK TK_SEMI                   { 
+                                                      raise SemanticError, "break statement outside of loop" if @loop_depth <= 0 
+                                                      AST::Control.new(val[0])
+                                                    }
+
+  #  'exit' ';'
+  
+  exit         : TK_EXIT TK_SEMI                    { AST::Control.new(val[0]) }
+
+end
+
+---- header ----
+#
+# generated by racc
+#
+require 'nice9.rex'
+require 'ast'
+require 'tiny_machine'
+
+---- inner ----
+
+class SemanticError < StandardError ; end
+
+attr_accessor :ast
+
+# class used to encapsulate an Nice9 type
+class Type9
+  attr_reader :underlying_type
+  attr_reader :array_size
+  
+  def initialize(underlying_type, array_size = -1)
+    @underlying_type = underlying_type
+    @array_size = array_size
+  end
+  
+  INT = new("int")
+  VOID = new("void")
+  STRING = new("string")
+  BOOLEAN = new("bool")
+  
+  def is_array
+    @array_size >= 0
+  end
+
+  def is_int
+    @underlying_type == "int"
+  end
+  
+  def is_bool
+    @underlying_type == "bool"
+  end
+  
+  def is_string
+    @underlying_type == "string"
+  end
+
+  def basic_type
+    self == Type9::VOID || self == Type9::INT || self == Type9::STRING || self == Type9::BOOLEAN
+  end
+  
+  def to_s
+    str = ""
+    if is_array
+      str = "[" + array_size.to_s + "]"
+      str += underlying_type.to_s
+    else
+      str = underlying_type
+    end
+   
+    str
+  end
+
+  def Type9.compat(type1, type2)
+    begin
+      Type9.compatible(type1, type2)
+    rescue SemanticError
+      raise SemanticError, "Type mismatch (" + type1.to_s + ", " + type2.to_s + ")"
+    end
+  end
+
+  def Type9.compatible(type1, type2)
+    is_compat = true
+
+    # if one is an array, they both must be an array
+    is_compat = false if type1.is_array && !type2.is_array || !type1.is_array && type2.is_array
+
+    if type1.is_array && type2.is_array
+      # arrays must be of equal length
+      if type1.array_size != type2.array_size
+        is_compat = false
+      else
+        # contents of arrays must be the same
+        is_compat = Type9.compat(type1.underlying_type, type2.underlying_type)
+      end
+    else
+      # not an array, just compare the type names
+      is_compat = false if type1.underlying_type != type2.underlying_type
+    end
+  
+    raise SemanticError if !is_compat
+
+    # return the type
+    type1
+  end
+end
+
+# class used to encapsulate an Nice9 varaible
+class Var9
+  attr_reader :name
+  attr_reader :var_type
+  attr_reader :is_assignable
+  attr_accessor :mem_offset
+  attr_accessor :mem_contains
+  attr_accessor :is_global
+  
+  def initialize(name, var_type, is_assignable, mem_contains = :value)
+    @name = name
+    @var_type = var_type
+    @is_assignable = is_assignable
+    @is_global = false
+    @mem_contains = mem_contains
+  end
+end
+
+# class used to encapsulate an Nice9 procedure. contains the name, return type, and arguments.
+class Proc9
+  attr_reader :name
+  attr_reader :return_type
+  attr_accessor :args
+  attr_accessor :forward_declared
+  attr_accessor :return_var
+  attr_accessor :mem_address
+  attr_accessor :activation_rec_size
+  
+  def initialize(name, return_type, args, forward_declared)
+    @name = name
+    @return_type = return_type
+    @args = args
+    @forward_declared = forward_declared
+  end
+  
+  def check_args(passed_args)
+    if passed_args.length > args.length
+      raise SemanticError, "Too many arguments to " + @name + ", expected " + @args.length.to_s + " got " + passed_args.length.to_s
+    elsif passed_args.length < args.length
+      raise SemanticError, "Not enough arguments to " + @name + ", expected " + @args.length.to_s + " got " + passed_args.length.to_s
+    end
+    if @args.length > 0
+      for i in 0..(@args.length - 1)
+        begin
+          Type9.compatible(@args[i].var_type, passed_args[i].node_type)
+        rescue SemanticError
+          raise SemanticError, "Type mismatch on argument " + (i+1).to_s + " of " + @name + ", expected " + @args[i].var_type.underlying_type + " got " + passed_args[i].node_type.underlying_type
+        end
+      end
+    end
+  end
+end
+
+
+def initialize
+  super
+  @lineno  =  1
+
+  @typeSymbols = []
+  @varSymbols = []
+  @procSymbols = []
+  @procSymbols.push Hash.new
+  
+  @loop_depth = 0
+
+  enterScope
+
+  # built-in types at the default scope
+  add_type("int", Type9::INT)
+  add_type("bool", Type9::BOOLEAN)
+  add_type("string", Type9::STRING)
+  add_type("void", Type9::VOID)
+end
+
+# add an entry to the symbol table within the current scope
+def add_symbol(symbols, key, value, desc)
+  v = symbols.last[key]
+  if !v.nil?
+    raise SemanticError, desc + " '" + key + "' already defined"
+  end
+
+  symbols.last[key] = value
+end
+
+def add_var(id, var_type, is_assignable = true)
+  v = Var9.new(id, var_type, is_assignable)
+  add_symbol(@varSymbols, id, v, "Variable")
+end
+
+def add_type(type_name, value)
+  add_symbol(@typeSymbols, type_name, value, "Type")
+end
+
+def add_proc(name, return_type, args, forward_declared)
+  # see if a proc by this name is already declared or defined in the symbol table
+  proc_existing = nil
+  begin
+    proc_existing = lookupProc(name)
+  rescue SemanticError
+    # ignore
+  end
+  
+  # set all the variables to pass by reference
+  for arg in args
+    arg.mem_contains = :reference
+  end
+  
+  if proc_existing.nil?
+    proc9 = Proc9.new(name, return_type, args, forward_declared)
+    add_symbol(@procSymbols, name, proc9, "Procedure")
+  else
+    raise SemanticError, "Procedure " + name + " is already defined"  if !proc_existing.forward_declared
+    raise SemanticError, "Procedure " + name + " is already declared" if forward_declared
+
+    # check the forward declaration to see if it matches this procedure definition
+    raise SemanticError, "Procedure " + name + " declared with return type " + proc_existing.return_type.to_s if proc_existing.return_type != return_type
+    raise SemanticError, "Procedure " + name + " declared with " + proc_existing.args.length.to_s + " arguments" if proc_existing.args.length != args.length
+
+    for i in 0..(args.length-1)
+      begin
+        Type9.compatible(args[i].var_type, proc_existing.args[i].var_type)
+      rescue SemanticError
+        raise SemanticError, "Argument " + i.to_s + " of " + name + " declared with type " + proc_existing.args[i].to_s
+      end
+    end
+    
+    # replace the declared variables with the defined variables
+    proc_existing.args = args
+    
+    # update the existing declaration to indicate it has been defined now
+    proc_existing.forward_declared = false
+    
+    proc_existing
+  end
+end
+
+def lookup(symbols, id, desc)
+  value = nil
+  (symbols.length-1).downto(0) do |n|
+    value = symbols[n][id]
+    break if !value.nil?
+  end
+  raise SemanticError, desc + " '" + id + "' undeclared" if value.nil?
+
+  value
+end
+
+def lookupType(id)
+  lookup(@typeSymbols, id, "Type")
+end
+
+def lookupVar(id)
+  lookup(@varSymbols, id, "Variable")
+end
+
+def lookupProc(id)
+  lookup(@procSymbols, id, "Procedure")
+end
+
+def enterScope
+  @typeSymbols.push Hash.new
+  @varSymbols.push Hash.new
+end
+
+def leaveScope
+  @varSymbols.pop
+  @typeSymbols.pop
+end
+
+def check_for_undefined_procs
+  @procSymbols.last.each {|key,value|
+    raise SemanticError, "Forward declared procedure " + key + " has no body" if value.forward_declared
+  }
+end
+
+---- footer ----
+
+nice9 = Nice9.new
+
+nice9.read_stdin
+
+begin
+  nice9.parse
+  nice9.check_for_undefined_procs
+  
+rescue Nice9::ScanError
+    puts 'line ' + nice9.lineno.to_s + ': illegal character (' + nice9.token + ')'
+    exit 1
+rescue ParseError
+    puts 'line ' + nice9.lineno.to_s + ': syntax error near ' + nice9.token
+    exit 1
+rescue Nice9::SemanticError, AST::SemanticError
+    puts "line " + nice9.lineno.to_s + ": #{$!}" 
+    exit 1
+end
+
+puts nice9.ast.to_s
+
+nice9.leaveScope
+
+if ARGV.size == 1
+  filename = ARGV.shift
+  output_file = File.new(filename, "w")
+
+  writer = TinyMachineWriter.new(output_file)
+  writer.generate_code(nice9.ast)
+  output_file.close
+end
+
+exit 0

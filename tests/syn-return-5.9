@@ -1,0 +1,14 @@
+#:compile
+proc f() : bool
+  for i := 1 to 17 then
+    if i > 5 then
+      return;
+    end
+  end
+  f := false;
+end
+
+while true then
+  f();
+  return;
+end

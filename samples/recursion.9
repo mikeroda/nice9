@@ -1,0 +1,18 @@
+var i : int;
+
+proc main() : int
+ i := i + 1;
+ if (i < 5) then
+   main := i + main();
+   return;
+ else then
+   main := 0;
+   return;
+ end
+end
+
+i := 0;
+
+write main();
+exit;
+

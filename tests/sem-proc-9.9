@@ -1,0 +1,9 @@
+#:compile
+proc f(f : int) : int
+  # 'f' now refers to the parameter
+  write f;
+  f := 1351;
+  write f;
+  # return value is undeendned
+end
+f(17);

@@ -1,0 +1,20 @@
+# factorial program
+proc fact(n: int) : int
+  if (n <= 1) then 
+     fact := n;
+  else then
+     fact := n * fact(n-1);
+  end
+end
+
+var f: int;
+
+writes "What number to you want to compute the factorial of? ";
+f := read;
+if (f < 1) + (f > 100) then write "Invalid: 0 < n < 101"; end
+
+
+writes "Factorial of ";
+writes f;
+writes " is ";
+write fact(f);
